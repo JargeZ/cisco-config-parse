@@ -2,12 +2,13 @@
 
 class CiscoConfigParse
     def initialize(raw_text_config, debug=false)
+        @raw_text_config = raw_text_config
         @config_lines = raw_text_config.gsub(/banner motd \^C\n.*^\^/m, '').split(/\n/).reject(&:empty?)
         @deb = debug
     end
 
     def parse
-        @banner = raw_text_config[/(?<=banner motd \^C\n).*(?=^\^)/m]
+        @banner = @raw_text_config[/(?<=banner motd \^C\n).*(?=^\^)/m]
         
         @config_lines.each do |line|
             if line =~ /^\!$/ or line =~ /^$/ # terminate current block
