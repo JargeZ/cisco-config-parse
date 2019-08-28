@@ -1,18 +1,29 @@
 #!/bin/env ruby
 
 class CiscoConfigParse
-    def initialize(io)
-        @io = io
+    def initialize(raw_text_config, debug=false)
+        @config_lines = raw_text_config.gsub(/banner motd \^C\n.*^\^/m, '').split(/\n/).reject(&:empty?)
+        @deb = debug
     end
 
     def parse
-        @io.each do |line|
+        @banner = raw_text_config[/(?<=banner motd \^C\n).*(?=^\^)/m]
+        
+        @config_lines.each do |line|
             if line =~ /^\!$/ or line =~ /^$/ # terminate current block
+                print "└───\n\n" if @deb
+                print "┌───\n" if @deb
                 end_config
                 next
-            elsif line =~ /^\!/ # Comment
+            elsif line =~ /^\b/
+                print "└───\n\n" if @deb
+                print "┌───\n" if @deb
+                end_config
+            elsif line =~ /^\!/ or line =~ /^\ $/ # Comment
+                print "-" if @deb
                 next
             end
+            print "├" + line.gsub(/[^\w]\ /, "─") + "\n" if @deb
             parse_config(line)
         end
     end
@@ -22,6 +33,10 @@ class CiscoConfigParse
     end
 
     def get_vlans
+        return @vlans
+    end
+
+    def get_banner
         return @vlans
     end
 
@@ -39,13 +54,16 @@ class CiscoConfigParse
     end
     def end_config
         meth = ['e_config', state].flatten.join('_')
-        send(meth) if respond_to?(meth)
+        # p meth.to_s + "--" + state.to_s if respond_to?(meth, :include_private)
+        send(meth) if respond_to?(meth, :include_private)
         state.pop
     end
     def parse_config(line)
         cmd, opts = line.strip.split(' ', 2)
+        # p line
         meth, opts = meth_and_opts(cmd, opts)
-        send(meth, opts) if respond_to?(meth)
+        # p meth.to_s + "--" + opts.to_s + " -" + respond_to?(meth, :include_private).to_s
+        send(meth, opts) if respond_to?(meth, :include_private)
     end
     def meth_and_opts(cmd, opts)
         return negated_meth_and_opts(opts) if cmd =~ /no/
@@ -66,11 +84,25 @@ class CiscoConfigParse
     end
 
     def p_config_vlan(ids)
-        @current_vlan = {:ids => ids}
+        case ids
+        when "configuration"
+            # Enters the vlan feature configuration mode
+            # (Allows you to configure VLANs without actually creating them)
+        when /^[0-9]+$/
+            state.push(:vlan)
+            @current_vlan = {:ids => ids}
+        end
+        # return if ids =~ /^[^0-9]+$/
+        # print "ids=" + ids + "\n"
+    end
+
+    def p_config_vlan_mode(mode)
+        @current_vlan[:mode] = mode
     end
 
     def e_config_vlan
         @vlans ||= {}
+        @current_vlan[:mode] = "ce" if @current_vlan[:mode].nil?
         @vlans[@current_vlan.delete(:ids)] = @current_vlan
     end
 
@@ -79,17 +111,14 @@ class CiscoConfigParse
         @current_interface = {:id => name}
     end
 
-    def e_config_interface
-        @interfaces ||= {}
-        @interfaces[@current_interface.delete(:id)] = @current_interface
-    end
-
     def p_config_interface_description(str)
         @current_interface[:description] = str
     end
 
     def p_config_interface_switchport(str)
         # Parse the switchport string
+        return if str.nil?
+
         command = str.split(' ', 3)
         case command[0]
         when "trunk"
@@ -107,6 +136,8 @@ class CiscoConfigParse
             end
         when "access"
             @current_interface[:access_vlan] = command[2]
+        when "mode"
+            @current_interface[:mode] = command[1]
         end
     end
 
@@ -131,5 +162,10 @@ class CiscoConfigParse
         # Is the port in a port channel?
         @current_interface[:channel_group] = str.split(' ')[0]
 
+    end
+
+    def e_config_interface
+        @interfaces ||= {}
+        @interfaces[@current_interface.delete(:id)] = @current_interface
     end
 end
