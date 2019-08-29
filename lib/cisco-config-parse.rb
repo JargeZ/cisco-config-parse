@@ -62,12 +62,17 @@ class CiscoConfigParse
     def parse_config(line)
         cmd, opts = line.strip.split(' ', 2)
         # p line
-        meth, opts = meth_and_opts(cmd, opts)
-        # p meth.to_s + "--" + opts.to_s + " -" + respond_to?(meth, :include_private).to_s
+        case state.last
+        when :ip_access_list_IOS_STANDARD, :ip_access_list_IOS_EXTENDED, :ip_access_list_NXOS
+            meth, opts = ['p_config', state].flatten.join('_'), line.strip
+        else
+            meth, opts = meth_and_opts(cmd, opts)
+        end
+        # p meth.to_s + " -> " + opts.to_s + " -" + respond_to?(meth, :include_private).to_s
         send(meth, opts) if respond_to?(meth, :include_private)
     end
     def meth_and_opts(cmd, opts)
-        return negated_meth_and_opts(opts) if cmd =~ /no/
+        return negated_meth_and_opts(opts) if cmd =~ /^no$/
             [['p_config', state, cmd.gsub('-', '_')].flatten.join('_'), opts]
     end
     def negated_meth_and_opts(line)
@@ -76,6 +81,70 @@ class CiscoConfigParse
     end
 
     protected
+
+    def p_config_ipv4(i)
+        p_config_ip(i)
+    end
+    def p_config_ip(str)
+        command = str.split(' ', 3)
+        # p command
+        case command[0]
+        when "domain-name"
+            @domain_name = command[1]
+        when "access-list"
+
+            case command[1]
+            when "standard"
+                state.push(:ip_access_list_IOS_STANDARD)
+            when "extended"
+                state.push(:ip_access_list_IOS_EXTENDED)
+            else
+                state.push(:ip_access_list_NXOS)
+                @current_acl = {:name => command[1]}        
+            end
+        else
+        # exit            
+        end
+            
+    end
+
+    def p_config_ip_access_list_NXOS(acl)
+        acl = acl.split(' ')
+        seq = acl.shift.to_i
+        action = acl.shift
+
+        @current_acl[seq] = {
+            seq: seq,
+            action: action
+        }
+        dirr, dirc = "src", false
+        acl.each_with_index { |word, i|
+            # print "-#{word}-"
+            case word
+            when "eq", "gt", "net-group", "port-group"
+                _1 = acl[i]
+                _2 = acl[i+1]
+                @current_acl[seq][_1.to_sym] = _2
+            when "ahp","eigrp","esp","gre","icmp","igmp","igrp","ipinip","ipv4","nos","ospf","pcp","pim","sctp","tcp","udp",/^[0-255]$/
+                @current_acl[seq][:protocol] = acl[i]
+            when "any", /^(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?$/
+                dirr = "dst" if dirc
+                @current_acl[seq][:"#{dirr}"] = acl[i]
+                dirc = true
+            when "host"
+                dirr = "dst" if dirc
+                _1 = acl[i]
+                _2 = acl[i+1]
+                @current_acl[seq][:"#{dirr}"] = _2
+                dirc = true
+            else
+                next
+            end
+        }
+        p @current_acl[seq]
+        # exit
+    end
+
     def p_config_hostname(str)
         @config_hostname = str
     end
